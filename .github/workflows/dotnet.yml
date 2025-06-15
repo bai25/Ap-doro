@@ -79,7 +79,7 @@ jobs:
         $bmp.Dispose()
         
         # 添加说明文件
-        Set-Content -Path "${{ env.OUTPUT_DIR }}/README.txt" -Value @"
+        $readmeContent = @"
 ApDoro - Windows登录界面背景修改工具
 
 版本: $env:VERSION
@@ -105,6 +105,7 @@ ApDoro - Windows登录界面背景修改工具
 如有问题请在GitHub提交Issue:
 https://github.com/bai25/Ap-doro/issues
 "@
+        Set-Content -Path "${{ env.OUTPUT_DIR }}/README.txt" -Value $readmeContent
 
     - name: Create release package
       run: |
