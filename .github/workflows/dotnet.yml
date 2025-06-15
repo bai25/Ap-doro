@@ -1,0 +1,184 @@
+name: Build 和 Package ApDoro
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+  release:
+    types: [created]
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_NAME: 'ApDoro'
+  OUTPUT_DIR: 'artifacts'
+  ZIP_NAME: 'ApDoro-Package.zip'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version from AssemblyInfo
+      id: version
+      run: |
+        $assemblyInfo = Get-Content -Path "ApDoro/Properties/AssemblyInfo.cs"
+        $versionLine = $assemblyInfo | Where-Object { $_ -match 'AssemblyFileVersion\("([\d.]+)"\)' }
+        $version = $matches[1]
+        echo "VERSION=$version" >> $env:GITHUB_ENV
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies
+      run: dotnet restore ${{ env.PROJECT_NAME }}.csproj
+
+    - name: Build project
+      run: dotnet build ${{ env.PROJECT_NAME }}.csproj --configuration Release --no-restore
+
+    - name: Publish application
+      run: |
+        dotnet publish ${{ env.PROJECT_NAME }}.csproj `
+          -c Release `
+          -o ${{ env.OUTPUT_DIR }} `
+          --no-build `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:PublishTrimmed=true `
+          -p:TrimMode=link
+
+    - name: Create sample background
+      run: |
+        # 创建示例背景图片
+        $sampleImage = "${{ env.OUTPUT_DIR }}/ApDoroBackground.jpg"
+        Add-Type -AssemblyName System.Drawing
+        $bmp = New-Object System.Drawing.Bitmap(1920, 1080)
+        $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+        $graphics.FillRectangle([System.Drawing.Brushes]::DarkBlue, 0, 0, 1920, 1080)
+        
+        # 添加ApDoro品牌标识
+        $font = New-Object System.Drawing.Font("Arial", 72, [System.Drawing.FontStyle]::Bold)
+        $brush = [System.Drawing.Brushes]::White
+        $graphics.DrawString("ApDoro", $font, $brush, 700, 400)
+        
+        $smallFont = New-Object System.Drawing.Font("Arial", 36)
+        $graphics.DrawString("Windows Login Background Changer", $smallFont, $brush, 500, 550)
+        $graphics.DrawString("v$env:VERSION", $smallFont, $brush, 850, 650)
+        
+        $bmp.Save($sampleImage, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+        $graphics.Dispose()
+        $bmp.Dispose()
+        
+        # 添加说明文件
+        Set-Content -Path "${{ env.OUTPUT_DIR }}/README.txt" -Value @"
+ApDoro - Windows登录界面背景修改工具
+
+版本: $env:VERSION
+项目地址: https://github.com/bai25/Ap-doro
+
+使用说明:
+1. 准备一张1920x1080分辨率的JPG图片
+2. 重命名为 'ApDoroBackground.jpg'
+3. 将图片放在本程序同一目录下
+4. 右键以管理员身份运行 ApDoro.exe
+5. 注销或重启系统查看效果
+
+高级选项:
+- 您可以在命令行中指定自定义图片路径:
+  ApDoro.exe "C:\path\to\your\image.jpg"
+
+注意事项:
+- 本工具仅支持 Windows 10/11 系统
+- 需要 .NET 8.0 运行时
+- 操作后需注销或重启才能生效
+
+技术支持:
+如有问题请在GitHub提交Issue:
+https://github.com/bai25/Ap-doro/issues
+"@
+
+    - name: Create release package
+      run: |
+        # 添加应用清单文件
+        Copy-Item -Path "app.manifest" -Destination "${{ env.OUTPUT_DIR }}/"
+        
+        # 创建ZIP包
+        $zipPath = "${{ env.ZIP_NAME }}"
+        Compress-Archive -Path "${{ env.OUTPUT_DIR }}/*" -DestinationPath $zipPath -Force
+        
+        # 计算SHA256校验和
+        $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
+        Set-Content -Path "${{ env.OUTPUT_DIR }}/SHA256SUM.txt" -Value "$hash  $zipPath"
+        
+        # 添加到ZIP包
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::Open($zipPath, "Update")
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, "${{ env.OUTPUT_DIR }}/SHA256SUM.txt", "SHA256SUM.txt")
+        $zip.Dispose()
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ApDoro-${{ env.VERSION }}
+        path: |
+          ${{ env.ZIP_NAME }}
+          ${{ env.OUTPUT_DIR }}/SHA256SUM.txt
+
+    - name: Create GitHub Release
+      if: github.event_name == 'release' && github.event.action == 'created'
+      uses: softprops/action-gh-release@v2
+      with:
+        name: ApDoro ${{ env.VERSION }}
+        tag_name: ${{ github.ref }}
+        files: |
+          ${{ env.ZIP_NAME }}
+          ${{ env.OUTPUT_DIR }}/SHA256SUM.txt
+        body: |
+          ### ApDoro - Windows登录界面背景修改工具
+          
+          **版本**: ${{ env.VERSION }}
+          **项目地址**: https://github.com/bai25/Ap-doro
+          
+          **功能**:
+          - 一键修改Windows 10/11登录背景
+          - 自动配置注册表项
+          - 自动创建系统目录
+          - 支持命令行自定义图片路径
+          
+          **使用要求**:
+          - Windows 10/11 操作系统
+          - .NET 8.0 运行时
+          - 管理员权限运行
+          
+          **使用说明**:
+          1. 下载并解压本ZIP包
+          2. 准备1920x1080的JPG图片，重命名为 `ApDoroBackground.jpg`
+          3. 将图片放在程序同一目录
+          4. 右键以管理员身份运行 `ApDoro.exe`
+          5. 注销或重启系统查看效果
+          
+          **命令行用法**:
+          ```
+          ApDoro.exe "C:\path\to\your\custom-background.jpg"
+          ```
+          
+          **校验和(SHA256)**:
+          ```
+          ${{ hashFiles(format('{0}/SHA256SUM.txt', env.OUTPUT_DIR)) }}
+          ```
+          
+          **注意事项**:
+          - 首次运行会请求管理员权限
+          - 操作后需注销/重启生效
+          - 图片推荐分辨率1920x1080
+          
+          ![示例背景](https://raw.githubusercontent.com/bai25/Ap-doro/main/sample-background.jpg)
